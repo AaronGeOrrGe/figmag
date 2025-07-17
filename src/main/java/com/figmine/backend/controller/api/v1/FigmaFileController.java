@@ -24,7 +24,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @Tag(name = "Figma Files", description = "Endpoints for viewing Figma files")
 @RestController
-@RequestMapping("/api/v1/figma/files")
+@RequestMapping("/v1/figma/files")
 @RequiredArgsConstructor
 public class FigmaFileController {
     private final FigmaFileService figmaFileService;
@@ -60,6 +60,7 @@ public class FigmaFileController {
         User user = userRepository.findByEmail(userDetails.getUsername()).orElseThrow();
         FigmaToken token = figmaTokenService.findByUserId(user.getId()).orElseThrow();
         String accessToken = figmaTokenService.refreshTokenIfNeeded(token).orElse(token.getAccessToken());
+        fileKey = fileKey.trim();
         FigmaFileDto fileDto = figmaFileService.getFigmaFile(fileKey, accessToken);
         return ResponseEntity.ok(fileDto);
     }

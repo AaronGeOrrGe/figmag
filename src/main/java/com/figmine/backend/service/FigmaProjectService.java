@@ -15,6 +15,7 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 @RequiredArgsConstructor
 public class FigmaProjectService {
     private final WebClient.Builder webClientBuilder;
+
     @Value("${figma.api.base-url:https://api.figma.com/v1}")
     private String figmaApiBaseUrl;
 
@@ -23,7 +24,7 @@ public class FigmaProjectService {
             WebClient webClient = webClientBuilder.baseUrl(figmaApiBaseUrl).build();
             return webClient.get()
                     .uri("/teams/{teamId}/projects", teamId)
-                    .header("X-Figma-Token", accessToken)
+                    .header("Authorization", "Bearer " + accessToken)
                     .retrieve()
                     .bodyToMono(FigmaProjectListDto.class)
                     .block();
@@ -38,6 +39,7 @@ public class FigmaProjectService {
 
     public FigmaFileListDto getFilesInProject(String projectId, String accessToken) {
         try {
+            log.info("Using Figma access token for projectId {}: {}", projectId, accessToken);
             WebClient webClient = webClientBuilder.baseUrl(figmaApiBaseUrl).build();
             return webClient.get()
                     .uri("/projects/{projectId}/files", projectId)

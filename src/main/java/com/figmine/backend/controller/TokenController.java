@@ -18,7 +18,7 @@ import java.util.Map;
 @Slf4j
 @RestController
 @RequiredArgsConstructor
-@RequestMapping("/api/tokens")
+@RequestMapping("/tokens")
 @Tag(name = "Token Management", description = "Endpoints for JWT blacklist, revocation, and validation")
 public class TokenController {
 

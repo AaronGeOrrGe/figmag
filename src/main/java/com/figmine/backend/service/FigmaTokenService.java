@@ -34,31 +34,33 @@ public class FigmaTokenService {
     @Value("${figma.client.secret}")
     private String clientSecret;
 
-    // ✅ 1. Get token by user ID
-    public FigmaToken getTokenForUser(Long userId) {
-        return tokenRepository.findByUser_Id(userId);
-    }
-
-    // ✅ 2. Save or replace existing token
+    @Value("${figma.api.base-url}")
+    private String figmaApiBaseUrl;
+    // 2. Save or replace existing token
     @Transactional
     public FigmaToken saveToken(String accessToken, String refreshToken, Long userId, Instant expiresAt) {
         log.debug("Saving token for user: {}", userId);
-        tokenRepository.deleteByUser_Id(userId);
-
+        FigmaToken existing = findByUserId(userId).orElse(null);
         User user = new User();
         user.setId(userId);
 
-        FigmaToken token = FigmaToken.builder()
-                .user(user)
-                .accessToken(accessToken)
-                .refreshToken(refreshToken)
-                .expiresAt(expiresAt)
-                .build();
-
-        return tokenRepository.save(token);
+        if (existing != null) {
+            existing.setAccessToken(accessToken);
+            existing.setRefreshToken(refreshToken);
+            existing.setExpiresAt(expiresAt);
+            return tokenRepository.save(existing);
+        } else {
+            FigmaToken token = FigmaToken.builder()
+                    .user(user)
+                    .accessToken(accessToken)
+                    .refreshToken(refreshToken)
+                    .expiresAt(expiresAt)
+                    .build();
+            return tokenRepository.save(token);
+        }
     }
 
-    // ✅ 3. Delete token by user
+    // 3. Delete token by user
     @Transactional
     public void deleteByUserId(Long userId) {
         log.debug("Deleting token for user: {}", userId);
@@ -121,7 +123,7 @@ public class FigmaTokenService {
             formData.add("refresh_token", token.getRefreshToken());
 
             FigmaTokenRefreshResponse response = client.post()
-                    .uri("https://www.figma.com/api/oauth/token")
+                    .uri(figmaApiBaseUrl + "/oauth/token")
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .body(BodyInserters.fromFormData(formData))
                     .retrieve()

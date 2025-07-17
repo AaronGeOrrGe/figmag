@@ -7,6 +7,7 @@ import com.figmine.backend.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -17,8 +18,8 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.util.UriComponentsBuilder;
+import org.springframework.core.ParameterizedTypeReference;
 
-import jakarta.servlet.http.HttpServletRequest;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -30,7 +31,7 @@ import java.util.Optional;
 @Slf4j
 @Tag(name = "Figma Integration", description = "Handles Figma OAuth authentication")
 @RestController
-@RequestMapping("/api/figma")
+@RequestMapping("/figma")
 @RequiredArgsConstructor
 public class FigmaAuthController {
 
@@ -48,39 +49,35 @@ public class FigmaAuthController {
     @Value("${figma.client.redirect-uri}")
     private String redirectUri;
 
-    // ✅ Step 1: Updated connect to use JWT in state
+    @Value("${figma.api.base-url}")
+    private String figmaApiBaseUrl;
+
     @Operation(summary = "Generate Figma OAuth URL")
     @ApiResponse(responseCode = "200", description = "OAuth URL generated successfully")
     @GetMapping("/connect")
     public ResponseEntity<Map<String, String>> getFigmaAuthUrl(HttpServletRequest request) {
-        try {
-            String authHeader = request.getHeader("Authorization");
-            if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Missing Authorization header");
-            }
-
-            String jwt = authHeader.substring(7); // Remove "Bearer "
-            jwtService.extractUsername(jwt); // Optional: Validate it
-
-            String state = URLEncoder.encode(jwt, StandardCharsets.UTF_8);
-
-            String authUrl = UriComponentsBuilder.fromHttpUrl("https://www.figma.com/oauth")
-                    .queryParam("client_id", clientId)
-                    .queryParam("redirect_uri", redirectUri)
-                    .queryParam("scope", "file_read")
-                    .queryParam("response_type", "code")
-                    .queryParam("state", state)
-                    .build()
-                    .toUriString();
-
-            return ResponseEntity.ok(Map.of("url", authUrl));
-        } catch (Exception e) {
-            log.error("Failed to generate Figma OAuth URL", e);
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "OAuth init failed");
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Missing Authorization header");
         }
+
+        String jwt = authHeader.substring(7);
+        jwtService.extractUsername(jwt); // Validate JWT
+
+        String state = URLEncoder.encode(jwt, StandardCharsets.UTF_8);
+        String authUrl = UriComponentsBuilder.fromHttpUrl("https://www.figma.com/oauth")
+                .queryParam("client_id", clientId)
+                .queryParam("redirect_uri", redirectUri)
+                .queryParam("scope", "files:read file_content:read projects:read")
+                .queryParam("response_type", "code")
+                .queryParam("state", state)
+                .build()
+                .toUriString();
+
+        log.info("Generated Figma OAuth URL: {}", authUrl);
+        return ResponseEntity.ok(Map.of("url", authUrl));
     }
 
-    // ✅ Step 2: Updated callback to extract JWT from state
     @Operation(summary = "Figma OAuth Callback")
     @ApiResponse(responseCode = "200", description = "OAuth token received successfully")
     @GetMapping("/callback")
@@ -88,70 +85,64 @@ public class FigmaAuthController {
             @RequestParam String code,
             @RequestParam(required = false) String state
     ) {
-        log.info("Figma callback hit: code={}, state={}", code, state);
-        try {
-            if (state == null) {
-                log.error("Missing state param");
-                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Missing state");
-            }
-            String jwt = URLDecoder.decode(state, StandardCharsets.UTF_8);
-            log.info("Decoded JWT: {}", jwt);
-            String email = jwtService.extractUsername(jwt);
-            log.info("Extracted email: {}", email);
-            User user = userService.findByEmail(email)
-                    .orElseThrow(() -> {
-                        log.error("User not found: {}", email);
-                        return new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found");
-                    });
-            log.info("User found: {}", user.getEmail());
+        log.info("Figma callback: code={}, state={}", code, state);
 
-            Map<String, Object> tokenData = exchangeCodeForToken(code)
-                    .orElseThrow(() -> {
-                        log.error("Failed to exchange code");
-                        return new ResponseStatusException(HttpStatus.BAD_REQUEST, "Failed to exchange code");
-                    });
-            log.info("Token data: {}", tokenData);
+        if (state == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Missing state");
 
-            String accessToken = (String) tokenData.get("access_token");
-            String refreshToken = (String) tokenData.get("refresh_token");
-            long expiresIn = Long.parseLong(tokenData.get("expires_in").toString());
-            Instant expiresAt = Instant.now().plus(expiresIn, ChronoUnit.SECONDS);
+        String jwt = URLDecoder.decode(state, StandardCharsets.UTF_8);
+        String email = jwtService.extractUsername(jwt);
+        log.info("Decoded user from JWT: {}", email);
 
-            figmaTokenService.saveToken(accessToken, refreshToken, user.getId(), expiresAt);
+        User user = userService.findByEmail(email)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
 
-            return ResponseEntity.ok(Map.of(
-                    "status", "success",
-                    "message", "Figma account linked",
-                    "expires_in", expiresIn
-            ));
-        } catch (ResponseStatusException e) {
-            log.error("OAuth callback ResponseStatusException", e);
-            throw e;
-        } catch (Exception e) {
-            log.error("OAuth callback error", e);
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Callback failed");
+        Map<String, Object> tokenData = exchangeCodeForToken(code)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Failed to exchange code for token"));
+
+        String accessToken = (String) tokenData.get("access_token");
+        String refreshToken = (String) tokenData.get("refresh_token");
+        Object expiresInObj = tokenData.get("expires_in");
+
+        if (accessToken == null || refreshToken == null || expiresInObj == null) {
+            log.error("Invalid token response: {}", tokenData);
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Invalid token response from Figma");
         }
+
+        long expiresIn = Long.parseLong(expiresInObj.toString());
+        Instant expiresAt = Instant.now().plus(expiresIn, ChronoUnit.SECONDS);
+
+        figmaTokenService.saveToken(accessToken, refreshToken, user.getId(), expiresAt);
+
+        return ResponseEntity.ok(Map.of(
+                "status", "success",
+                "message", "Figma account linked successfully",
+                "expires_in", expiresIn
+        ));
     }
 
-    // ✅ Helper to exchange code for token
     private Optional<Map<String, Object>> exchangeCodeForToken(String code) {
         try {
+            String credentials = clientId + ":" + clientSecret;
+            String encoded = java.util.Base64.getEncoder()
+                    .encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
+
             MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
-            form.add("client_id", clientId);
-            form.add("client_secret", clientSecret);
             form.add("redirect_uri", redirectUri);
             form.add("code", code);
             form.add("grant_type", "authorization_code");
 
-            return Optional.ofNullable(
-                    webClient.post()
-                            .uri("https://www.figma.com/api/oauth/token")
-                            .contentType(MediaType.APPLICATION_FORM_URLENCODED)
-                            .bodyValue(form)
-                            .retrieve()
-                            .bodyToMono(Map.class)
-                            .block()
-            );
+
+            Map<String, Object> response = webClient.post()
+                    .uri(figmaApiBaseUrl + "/oauth/token")
+                    .header("Authorization", "Basic " + encoded)
+                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                    .bodyValue(form)
+                    .retrieve()
+                    .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
+                    .block();
+
+            log.info("Token exchange response: {}", response);
+            return Optional.ofNullable(response);
         } catch (Exception e) {
             log.error("Token exchange failed", e);
             return Optional.empty();
