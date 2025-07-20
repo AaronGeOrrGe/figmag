@@ -81,10 +81,11 @@ public class FigmaAuthController {
     @Operation(summary = "Figma OAuth Callback")
     @ApiResponse(responseCode = "200", description = "OAuth token received successfully")
     @GetMapping("/callback")
-    public ResponseEntity<Map<String, Object>> handleFigmaCallback(
+    public void handleFigmaCallback(
             @RequestParam String code,
-            @RequestParam(required = false) String state
-    ) {
+            @RequestParam(required = false) String state,
+            jakarta.servlet.http.HttpServletResponse response
+    ) throws java.io.IOException {
         log.info("Figma callback: code={}, state={}", code, state);
 
         if (state == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Missing state");
@@ -113,11 +114,8 @@ public class FigmaAuthController {
 
         figmaTokenService.saveToken(accessToken, refreshToken, user.getId(), expiresAt);
 
-        return ResponseEntity.ok(Map.of(
-                "status", "success",
-                "message", "Figma account linked successfully",
-                "expires_in", expiresIn
-        ));
+        // Redirect to frontend after successful OAuth
+        response.sendRedirect("http://localhost:8081/figma-callback?status=success");
     }
 
     private Optional<Map<String, Object>> exchangeCodeForToken(String code) {
@@ -130,7 +128,6 @@ public class FigmaAuthController {
             form.add("redirect_uri", redirectUri);
             form.add("code", code);
             form.add("grant_type", "authorization_code");
-
 
             Map<String, Object> response = webClient.post()
                     .uri(figmaApiBaseUrl + "/oauth/token")
