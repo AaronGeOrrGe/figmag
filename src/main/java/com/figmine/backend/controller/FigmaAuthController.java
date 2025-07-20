@@ -115,7 +115,7 @@ public class FigmaAuthController {
         figmaTokenService.saveToken(accessToken, refreshToken, user.getId(), expiresAt);
 
         // Redirect to frontend after successful OAuth
-        response.sendRedirect("http://172.20.10.2:8081/figma-callback?status=success");
+        response.sendRedirect("http://localhost:8081/figma-callback?status=success");
     }
 
     private Optional<Map<String, Object>> exchangeCodeForToken(String code) {
